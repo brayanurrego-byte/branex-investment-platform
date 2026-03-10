@@ -25,9 +25,26 @@ const SECTORS = [
   'Otros',
 ]
 
-// Consistent number formatter
+// Parse number accepting both comma and period as decimal separator
+const parseDecimal = (value: string): number => {
+  const clean = value.replace(',', '.')
+  const parsed = parseFloat(clean)
+  return isNaN(parsed) ? 0 : parsed
+}
+
+// Format share quantity — show up to 8 decimals, no trailing zeros
+const formatShares = (num: number): string => {
+  if (num === 0) return '0'
+  if (Number.isInteger(num)) return num.toString()
+  return num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 8 })
+}
+
+// Format currency — always 2 decimals
 const formatNumber = (num: number): string => {
-  return new Intl.NumberFormat('es-ES').format(num)
+  return new Intl.NumberFormat('es-ES', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(num)
 }
 
 const formatCurrency = (num: number): string => {
@@ -246,7 +263,7 @@ export default function PortafolioPage() {
               <div className="glass-card p-3 md:p-5 animate-fade-slide-up">
                 <p className="text-xs md:text-sm text-[#8892b0] mb-1">Valor Total</p>
                 <p className="text-lg md:text-2xl font-bold font-mono text-white">
-                  ${formatNumber(Math.round(metrics.totalValue))}
+                  ${formatNumber(metrics.totalValue)}
                 </p>
               </div>
               <div className="glass-card p-3 md:p-5 animate-fade-slide-up" style={{ animationDelay: '50ms' }}>
@@ -255,7 +272,7 @@ export default function PortafolioPage() {
                   "text-lg md:text-2xl font-bold font-mono",
                   metrics.totalPnL >= 0 ? "text-[#00FF88]" : "text-[#FF3366]"
                 )}>
-                  {metrics.totalPnL >= 0 ? '+' : ''}${formatNumber(Math.round(metrics.totalPnL))}
+                  {metrics.totalPnL >= 0 ? '+' : ''}${formatNumber(metrics.totalPnL)}
                 </p>
               </div>
               <div className="glass-card p-3 md:p-5 animate-fade-slide-up" style={{ animationDelay: '100ms' }}>
@@ -344,7 +361,7 @@ export default function PortafolioPage() {
                     <div className="grid grid-cols-2 gap-2 text-sm">
                       <div>
                         <span className="text-[#8892b0] text-xs">Cantidad</span>
-                        <p className="font-mono text-white">{formatNumber(holding.quantity)}</p>
+                        <p className="font-mono text-white">{formatShares(holding.quantity)}</p>
                       </div>
                       <div>
                         <span className="text-[#8892b0] text-xs">Precio Actual</span>
@@ -352,7 +369,7 @@ export default function PortafolioPage() {
                       </div>
                       <div>
                         <span className="text-[#8892b0] text-xs">Valor Mercado</span>
-                        <p className="font-mono text-white">${formatNumber(Math.round(holding.marketValue))}</p>
+                        <p className="font-mono text-white">${formatNumber(holding.marketValue)}</p>
                       </div>
                       <div>
                         <span className="text-[#8892b0] text-xs">P&L</span>
@@ -415,7 +432,7 @@ export default function PortafolioPage() {
                           </span>
                         </td>
                         <td className="px-3 py-4 text-sm font-mono text-white">
-                          {formatNumber(holding.quantity)}
+                          {formatShares(holding.quantity)}
                         </td>
                         <td className="px-3 py-4 text-sm font-mono text-[#8892b0]">
                           ${formatCurrency(holding.avgCost)}
@@ -424,14 +441,14 @@ export default function PortafolioPage() {
                           ${formatCurrency(holding.currentPrice)}
                         </td>
                         <td className="px-3 py-4 text-sm font-mono text-white">
-                          ${formatNumber(Math.round(holding.marketValue))}
+                          ${formatNumber(holding.marketValue)}
                         </td>
                         <td className="px-3 py-4">
                           <span className={cn(
                             "text-sm font-mono",
                             holding.totalPnL >= 0 ? "text-[#00FF88]" : "text-[#FF3366]"
                           )}>
-                            {holding.totalPnL >= 0 ? '+' : ''}${formatNumber(Math.round(holding.totalPnL))}
+                            {holding.totalPnL >= 0 ? '+' : ''}${formatNumber(holding.totalPnL)}
                           </span>
                         </td>
                         <td className="px-3 py-4">
@@ -564,9 +581,11 @@ export default function PortafolioPage() {
                 <label className="block text-sm text-[#8892b0] mb-2">Cantidad de Acciones *</label>
                 <input
                   type="number"
+                  step="any"
+                  min="0"
                   value={formData.quantity || ''}
-                  onChange={(e) => setFormData({ ...formData, quantity: parseFloat(e.target.value) || 0 })}
-                  placeholder="100"
+                  onChange={(e) => setFormData({ ...formData, quantity: parseDecimal(e.target.value) })}
+                  placeholder="0.25"
                   className="w-full h-10 px-3 bg-[rgba(255,255,255,0.03)] border border-[rgba(0,163,255,0.15)] rounded-lg text-white placeholder:text-[#8892b0] focus:outline-none focus:border-[#00A3FF]"
                 />
               </div>
@@ -574,9 +593,10 @@ export default function PortafolioPage() {
                 <label className="block text-sm text-[#8892b0] mb-2">Precio Promedio de Compra *</label>
                 <input
                   type="number"
-                  step="0.01"
+                  step="any"
+                  min="0"
                   value={formData.avgCost || ''}
-                  onChange={(e) => setFormData({ ...formData, avgCost: parseFloat(e.target.value) || 0 })}
+                  onChange={(e) => setFormData({ ...formData, avgCost: parseDecimal(e.target.value) })}
                   placeholder="150.00"
                   className="w-full h-10 px-3 bg-[rgba(255,255,255,0.03)] border border-[rgba(0,163,255,0.15)] rounded-lg text-white placeholder:text-[#8892b0] focus:outline-none focus:border-[#00A3FF]"
                 />
@@ -585,9 +605,10 @@ export default function PortafolioPage() {
                 <label className="block text-sm text-[#8892b0] mb-2">Precio Actual *</label>
                 <input
                   type="number"
-                  step="0.01"
+                  step="any"
+                  min="0"
                   value={formData.currentPrice || ''}
-                  onChange={(e) => setFormData({ ...formData, currentPrice: parseFloat(e.target.value) || 0 })}
+                  onChange={(e) => setFormData({ ...formData, currentPrice: parseDecimal(e.target.value) })}
                   placeholder="175.50"
                   className="w-full h-10 px-3 bg-[rgba(255,255,255,0.03)] border border-[rgba(0,163,255,0.15)] rounded-lg text-white placeholder:text-[#8892b0] focus:outline-none focus:border-[#00A3FF]"
                 />
@@ -621,13 +642,13 @@ export default function PortafolioPage() {
                   <div>
                     <p className="text-[10px] md:text-xs text-[#8892b0]">Inversion</p>
                     <p className="text-sm md:text-lg font-mono font-semibold text-white">
-                      ${formatNumber(Math.round(formData.quantity * formData.avgCost))}
+                      ${formatNumber(formData.quantity * formData.avgCost)}
                     </p>
                   </div>
                   <div>
                     <p className="text-[10px] md:text-xs text-[#8892b0]">Valor Actual</p>
                     <p className="text-sm md:text-lg font-mono font-semibold text-white">
-                      ${formatNumber(Math.round(formData.quantity * formData.currentPrice))}
+                      ${formatNumber(formData.quantity * formData.currentPrice)}
                     </p>
                   </div>
                   <div>
