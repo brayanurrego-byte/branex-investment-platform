@@ -184,8 +184,8 @@ export default function PortafolioPage() {
   }
 
   const handleSaveSnapshot = () => {
-    const date = saveWeeklySnapshot()
-    setSnapshotSaved(date)
+    saveWeeklySnapshot()
+    setSnapshotSaved(new Date().toLocaleDateString("es-ES"))
     setTimeout(() => setSnapshotSaved(null), 3000)
   }
 
