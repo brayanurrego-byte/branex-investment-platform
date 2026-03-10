@@ -115,7 +115,8 @@ export default function PortafolioPage() {
     if (isLoaded && !activePortfolioId) {
       router.replace('/')
     }
-  }, [isLoaded, hasActivePortfolio, router])
+  }, [isLoaded, activePortfolioId
+    , router])
 
   const hasData = holdingsWithMetrics.length > 0
 
