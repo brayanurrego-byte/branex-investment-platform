@@ -1,552 +1,266 @@
 "use client"
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import type { 
-  Holding, 
-  Transaction, 
-  UserProfile, 
+import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/hooks/use-auth'
+import type {
+  Holding,
+  Transaction,
   Portfolio,
-  BranexStorage,
-  PortfolioMetrics, 
+  PortfolioMetrics,
   HoldingWithMetrics,
-  PortfolioSnapshot
+  PortfolioSnapshot,
 } from '@/lib/branex-types'
 
-const STORAGE_KEY = 'branex_storage'
-
-const SECTOR_COLORS: Record<string, string> = {
+export const SECTOR_COLORS: Record<string, string> = {
   'Tecnología': '#00A3FF',
   'Salud': '#00FF88',
   'Finanzas': '#7B61FF',
   'Consumo': '#FFB800',
+  'Consumo Discrecional': '#FFB800',
+  'Consumo Básico': '#FF8C00',
   'Energía': '#FF3366',
   'Industrial': '#00D4FF',
+  'Industriales': '#00D4FF',
   'Materiales': '#FF8C00',
   'Inmobiliario': '#9D4EDD',
   'Telecomunicaciones': '#06D6A0',
+  'Comunicaciones': '#06D6A0',
   'Servicios Públicos': '#EF476F',
   'Otros': '#8892b0',
 }
 
-// Empty default profile
-const DEFAULT_PROFILE: UserProfile = {
-  name: 'Usuario',
-  company: '',
-  currency: 'USD',
-  portfolioStartDate: new Date().toISOString().split('T')[0],
-  initialCapital: 0,
-  benchmark: 'SP500',
-}
-
-function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-}
-
 export function useBranexData() {
-  const [storage, setStorage] = useState<BranexStorage | null>(null)
+  const { user } = useAuth()
+  const [portfolios, setPortfolios] = useState<Portfolio[]>([])
+  const [activePortfolioId, setActivePortfolioId] = useState<string | null>(null)
+  const [holdings, setHoldings] = useState<Holding[]>([])
+  const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [snapshots, setSnapshots] = useState<PortfolioSnapshot[]>([])
   const [isLoaded, setIsLoaded] = useState(false)
 
-  // Load data from localStorage on mount
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored)
-        // Check if it's the new multi-portfolio format
-        if ('portfolios' in parsed) {
-          setStorage(parsed)
-        } else {
-          // Migrate from old format
-          const oldData = parsed
-          const migratedPortfolio: Portfolio = {
-            id: generateId(),
-            name: 'Portafolio Principal',
-            createdAt: new Date().toISOString(),
-            holdings: oldData.holdings || [],
-            transactions: oldData.transactions || [],
-            snapshots: oldData.snapshots || [],
-            profile: oldData.profile || DEFAULT_PROFILE,
-          }
-          const newStorage: BranexStorage = {
-            activePortfolioId: migratedPortfolio.id,
-            portfolios: [migratedPortfolio],
-          }
-          setStorage(newStorage)
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(newStorage))
-        }
-      } catch {
-        // If parsing fails, initialize with empty storage
-        const emptyStorage: BranexStorage = {
-          activePortfolioId: null,
-          portfolios: [],
-        }
-        setStorage(emptyStorage)
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(emptyStorage))
-      }
-    } else {
-      // First load - initialize with empty storage (NO PORTFOLIOS)
-      const emptyStorage: BranexStorage = {
-        activePortfolioId: null,
-        portfolios: [],
-      }
-      setStorage(emptyStorage)
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(emptyStorage))
+    if (!user) { setPortfolios([]); setIsLoaded(true); return }
+    loadPortfolios()
+  }, [user])
+
+  useEffect(() => {
+    if (!activePortfolioId || !user) return
+    loadPortfolioData(activePortfolioId)
+    localStorage.setItem('branex_active_portfolio', activePortfolioId)
+  }, [activePortfolioId, user])
+
+  useEffect(() => {
+    if (!user) return
+    const saved = localStorage.getItem('branex_active_portfolio')
+    if (saved) setActivePortfolioId(saved)
+  }, [user])
+
+  const loadPortfolios = async () => {
+    if (!user) return
+    const { data, error } = await supabase
+      .from('portfolios').select('*').eq('user_id', user.id).order('created_at', { ascending: false })
+    if (!error && data) {
+      setPortfolios(data.map(p => ({
+        id: p.id, name: p.name, createdAt: p.created_at,
+        holdings: [], transactions: [], snapshots: [],
+        profile: { name: '', company: '', currency: p.currency || 'USD',
+          portfolioStartDate: p.start_date || new Date().toISOString().split('T')[0],
+          initialCapital: p.initial_capital || 0, benchmark: p.benchmark || 'SP500' }
+      })))
     }
     setIsLoaded(true)
-  }, [])
+  }
 
-  // Save data to localStorage whenever it changes
-  useEffect(() => {
-    if (storage && isLoaded) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(storage))
-    }
-  }, [storage, isLoaded])
+  const loadPortfolioData = async (portfolioId: string) => {
+    if (!user) return
+    const [holdingsRes, txRes, snapshotsRes] = await Promise.all([
+      supabase.from('holdings').select('*').eq('portfolio_id', portfolioId).eq('user_id', user.id).order('created_at', { ascending: true }),
+      supabase.from('transactions').select('*').eq('portfolio_id', portfolioId).eq('user_id', user.id).order('date', { ascending: false }),
+      supabase.from('snapshots').select('*').eq('portfolio_id', portfolioId).eq('user_id', user.id).order('date', { ascending: true })
+    ])
+    if (holdingsRes.data) setHoldings(holdingsRes.data.map(h => ({
+      id: h.id, name: h.name, symbol: h.symbol, sector: h.sector,
+      sectorColor: h.sector_color || SECTOR_COLORS[h.sector] || SECTOR_COLORS['Otros'],
+      quantity: Number(h.quantity), avgCost: Number(h.avg_cost),
+      currentPrice: Number(h.current_price), entryDate: h.entry_date, notes: h.notes,
+    })))
+    if (txRes.data) setTransactions(txRes.data.map(t => ({
+      id: t.id, date: t.date, type: t.type as Transaction['type'],
+      assetName: t.asset_name, symbol: t.symbol,
+      shares: Number(t.shares), pricePerShare: Number(t.price_per_share),
+      total: Number(t.total), notes: t.notes,
+    })))
+    if (snapshotsRes.data) setSnapshots(snapshotsRes.data.map(s => ({
+      date: s.date, value: Number(s.value), invested: Number(s.invested),
+    })))
+  }
 
-  // Get active portfolio
-  const activePortfolio = useMemo(() => {
-    if (!storage || !storage.activePortfolioId) return null
-    return storage.portfolios.find(p => p.id === storage.activePortfolioId) || null
-  }, [storage])
+  const activePortfolio = useMemo(() => portfolios.find(p => p.id === activePortfolioId) || null, [portfolios, activePortfolioId])
 
-  // Holdings with calculated metrics
   const holdingsWithMetrics: HoldingWithMetrics[] = useMemo(() => {
-    if (!activePortfolio?.holdings || activePortfolio.holdings.length === 0) return []
-    
-    const totalPortfolioValue = activePortfolio.holdings.reduce(
-      (sum, h) => sum + h.currentPrice * h.quantity,
-      0
-    )
-    
-    return activePortfolio.holdings.map(h => {
+    if (!holdings || holdings.length === 0) return []
+    const totalValue = holdings.reduce((sum, h) => sum + h.currentPrice * h.quantity, 0)
+    return holdings.map(h => {
       const marketValue = h.currentPrice * h.quantity
       const totalInvested = h.avgCost * h.quantity
       const totalPnL = marketValue - totalInvested
       const pnlPercent = totalInvested > 0 ? (totalPnL / totalInvested) * 100 : 0
-      const weight = totalPortfolioValue > 0 ? (marketValue / totalPortfolioValue) * 100 : 0
-      
-      return {
-        ...h,
-        marketValue,
-        totalPnL,
-        pnlPercent,
-        weight,
-      }
+      const weight = totalValue > 0 ? (marketValue / totalValue) * 100 : 0
+      return { ...h, marketValue, totalPnL, pnlPercent, weight }
     })
-  }, [activePortfolio?.holdings])
+  }, [holdings])
 
-  // Calculate portfolio metrics
   const metrics: PortfolioMetrics = useMemo(() => {
-    if (!activePortfolio?.holdings || activePortfolio.holdings.length === 0) {
-      return {
-        totalValue: 0,
-        totalInvested: 0,
-        totalPnL: 0,
-        totalReturnPercent: 0,
-        activePositions: 0,
-        sharpeRatio: 0,
-        sectorAllocation: [],
-      }
-    }
-
+    if (!holdings || holdings.length === 0) return { totalValue: 0, totalInvested: 0, totalPnL: 0, totalReturnPercent: 0, activePositions: 0, sharpeRatio: 0, sectorAllocation: [] }
     const totalValue = holdingsWithMetrics.reduce((sum, h) => sum + h.marketValue, 0)
     const totalInvested = holdingsWithMetrics.reduce((sum, h) => sum + h.avgCost * h.quantity, 0)
     const totalPnL = totalValue - totalInvested
     const totalReturnPercent = totalInvested > 0 ? (totalPnL / totalInvested) * 100 : 0
-    const activePositions = activePortfolio.holdings.length
-
-    // Calculate sector allocation
     const sectorMap: Record<string, number> = {}
-    holdingsWithMetrics.forEach(h => {
-      sectorMap[h.sector] = (sectorMap[h.sector] || 0) + h.marketValue
-    })
-    
+    holdingsWithMetrics.forEach(h => { sectorMap[h.sector] = (sectorMap[h.sector] || 0) + h.marketValue })
     const sectorAllocation = Object.entries(sectorMap).map(([name, value]) => ({
-      name,
-      value: Math.round((value / totalValue) * 100),
-      color: SECTOR_COLORS[name] || SECTOR_COLORS['Otros'],
+      name, value: Math.round((value / totalValue) * 100), color: SECTOR_COLORS[name] || SECTOR_COLORS['Otros'],
     }))
+    const sharpeRatio = Number(Math.max(0, ((totalReturnPercent / 2) - 5) / 15).toFixed(2))
+    return { totalValue, totalInvested, totalPnL, totalReturnPercent, activePositions: holdings.length, sharpeRatio, sectorAllocation }
+  }, [holdings, holdingsWithMetrics])
 
-    // Simplified Sharpe ratio calculation
-    const avgReturn = totalReturnPercent / 2 // Annualized
-    const riskFreeRate = 5 // 5% risk-free rate
-    const volatility = 15 // Assumed 15% volatility
-    const sharpeRatio = Number(((avgReturn - riskFreeRate) / volatility).toFixed(2))
-
-    return {
-      totalValue,
-      totalInvested,
-      totalPnL,
-      totalReturnPercent,
-      activePositions,
-      sharpeRatio: Math.max(0, sharpeRatio),
-      sectorAllocation,
-    }
-  }, [activePortfolio?.holdings, holdingsWithMetrics])
-
-  // Helper to update active portfolio
-  const updateActivePortfolio = useCallback((updater: (p: Portfolio) => Portfolio) => {
-    setStorage(prev => {
-      if (!prev || !prev.activePortfolioId) return prev
-      return {
-        ...prev,
-        portfolios: prev.portfolios.map(p => 
-          p.id === prev.activePortfolioId ? updater(p) : p
-        ),
-      }
-    })
-  }, [])
-
-  // Create a new portfolio
-  const createPortfolio = useCallback((name: string) => {
+  const createPortfolio = useCallback(async (name: string) => {
+    if (!user) return null
+    const { data, error } = await supabase.from('portfolios').insert({ user_id: user.id, name }).select().single()
+    if (error || !data) return null
     const newPortfolio: Portfolio = {
-      id: generateId(),
-      name,
-      createdAt: new Date().toISOString(),
-      holdings: [],
-      transactions: [],
-      snapshots: [],
-      profile: { ...DEFAULT_PROFILE },
+      id: data.id, name: data.name, createdAt: data.created_at,
+      holdings: [], transactions: [], snapshots: [],
+      profile: { name: '', company: '', currency: 'USD', portfolioStartDate: new Date().toISOString().split('T')[0], initialCapital: 0, benchmark: 'SP500' }
     }
-    setStorage(prev => {
-      if (!prev) return { activePortfolioId: newPortfolio.id, portfolios: [newPortfolio] }
-      return {
-        activePortfolioId: newPortfolio.id,
-        portfolios: [...prev.portfolios, newPortfolio],
-      }
-    })
-    return newPortfolio.id
-  }, [])
+    setPortfolios(prev => [newPortfolio, ...prev])
+    return newPortfolio
+  }, [user])
 
-  // Select a portfolio
   const selectPortfolio = useCallback((id: string) => {
-    setStorage(prev => {
-      if (!prev) return prev
-      return { ...prev, activePortfolioId: id }
-    })
+    setHoldings([]); setTransactions([]); setSnapshots([])
+    setActivePortfolioId(id)
   }, [])
 
-  // Exit portfolio (go back to selection screen)
+  const renamePortfolio = useCallback(async (id: string, name: string) => {
+    if (!user) return
+    await supabase.from('portfolios').update({ name }).eq('id', id).eq('user_id', user.id)
+    setPortfolios(prev => prev.map(p => p.id === id ? { ...p, name } : p))
+  }, [user])
+
+  const deletePortfolio = useCallback(async (id: string) => {
+    if (!user) return
+    await supabase.from('portfolios').delete().eq('id', id).eq('user_id', user.id)
+    setPortfolios(prev => prev.filter(p => p.id !== id))
+    if (activePortfolioId === id) { setActivePortfolioId(null); localStorage.removeItem('branex_active_portfolio') }
+  }, [user, activePortfolioId])
+
   const exitPortfolio = useCallback(() => {
-    setStorage(prev => {
-      if (!prev) return prev
-      return { ...prev, activePortfolioId: null }
-    })
+    setActivePortfolioId(null); setHoldings([]); setTransactions([]); setSnapshots([])
+    localStorage.removeItem('branex_active_portfolio')
   }, [])
 
-  // Delete a portfolio
-  const deletePortfolio = useCallback((id: string) => {
-    setStorage(prev => {
-      if (!prev) return prev
-      const newPortfolios = prev.portfolios.filter(p => p.id !== id)
-      return {
-        activePortfolioId: prev.activePortfolioId === id ? null : prev.activePortfolioId,
-        portfolios: newPortfolios,
-      }
-    })
-  }, [])
+  const addHolding = useCallback(async (holding: Omit<Holding, 'id' | 'sectorColor'>) => {
+    if (!user || !activePortfolioId) return
+    const sectorColor = SECTOR_COLORS[holding.sector] || SECTOR_COLORS['Otros']
+    const { data, error } = await supabase.from('holdings').insert({
+      portfolio_id: activePortfolioId, user_id: user.id,
+      name: holding.name, symbol: holding.symbol.toUpperCase(), sector: holding.sector,
+      sector_color: sectorColor, quantity: holding.quantity, avg_cost: holding.avgCost,
+      current_price: holding.currentPrice, entry_date: holding.entryDate, notes: holding.notes,
+    }).select().single()
+    if (!error && data) setHoldings(prev => [...prev, {
+      id: data.id, name: data.name, symbol: data.symbol, sector: data.sector,
+      sectorColor: data.sector_color, quantity: Number(data.quantity),
+      avgCost: Number(data.avg_cost), currentPrice: Number(data.current_price),
+      entryDate: data.entry_date, notes: data.notes,
+    }])
+  }, [user, activePortfolioId])
 
-  // Update portfolio metadata (name, etc)
-  const updatePortfolioMeta = useCallback((updates: Partial<Pick<Portfolio, 'name'>>) => {
-    updateActivePortfolio(p => ({ ...p, ...updates }))
-  }, [updateActivePortfolio])
+  const updateHolding = useCallback(async (id: string, updates: Partial<Omit<Holding, 'id'>>) => {
+    if (!user) return
+    const dbUpdates: Record<string, unknown> = { updated_at: new Date().toISOString() }
+    if (updates.name) dbUpdates.name = updates.name
+    if (updates.symbol) dbUpdates.symbol = updates.symbol.toUpperCase()
+    if (updates.sector) { dbUpdates.sector = updates.sector; dbUpdates.sector_color = SECTOR_COLORS[updates.sector] || SECTOR_COLORS['Otros'] }
+    if (updates.quantity !== undefined) dbUpdates.quantity = updates.quantity
+    if (updates.avgCost !== undefined) dbUpdates.avg_cost = updates.avgCost
+    if (updates.currentPrice !== undefined) dbUpdates.current_price = updates.currentPrice
+    if (updates.entryDate) dbUpdates.entry_date = updates.entryDate
+    if (updates.notes !== undefined) dbUpdates.notes = updates.notes
+    await supabase.from('holdings').update(dbUpdates).eq('id', id).eq('user_id', user.id)
+    setHoldings(prev => prev.map(h => h.id === id ? {
+      ...h, ...updates, sectorColor: updates.sector ? SECTOR_COLORS[updates.sector] || SECTOR_COLORS['Otros'] : h.sectorColor
+    } : h))
+  }, [user])
 
-  // Add a new holding
-  const addHolding = useCallback((holding: Omit<Holding, 'id' | 'sectorColor'>) => {
-    updateActivePortfolio(p => {
-      const newHolding: Holding = {
-        ...holding,
-        id: generateId(),
-        sectorColor: SECTOR_COLORS[holding.sector] || SECTOR_COLORS['Otros'],
-      }
-      return {
-        ...p,
-        holdings: [...p.holdings, newHolding],
-      }
-    })
-  }, [updateActivePortfolio])
+  const deleteHolding = useCallback(async (id: string) => {
+    if (!user) return
+    await supabase.from('holdings').delete().eq('id', id).eq('user_id', user.id)
+    setHoldings(prev => prev.filter(h => h.id !== id))
+  }, [user])
 
-  // Update an existing holding
-  const updateHolding = useCallback((id: string, updates: Partial<Omit<Holding, 'id'>>) => {
-    updateActivePortfolio(p => ({
-      ...p,
-      holdings: p.holdings.map(h => {
-        if (h.id === id) {
-          const updated = { ...h, ...updates }
-          if (updates.sector) {
-            updated.sectorColor = SECTOR_COLORS[updates.sector] || SECTOR_COLORS['Otros']
-          }
-          return updated
-        }
-        return h
-      }),
-    }))
-  }, [updateActivePortfolio])
+  const updateHoldingPrice = useCallback(async (id: string, newPrice: number) => {
+    if (!user) return
+    await supabase.from('holdings').update({ current_price: newPrice, updated_at: new Date().toISOString() }).eq('id', id).eq('user_id', user.id)
+    setHoldings(prev => prev.map(h => h.id === id ? { ...h, currentPrice: newPrice } : h))
+  }, [user])
 
-  // Update just the current price of a holding
-  const updateHoldingPrice = useCallback((id: string, newPrice: number) => {
-    updateActivePortfolio(p => ({
-      ...p,
-      holdings: p.holdings.map(h => 
-        h.id === id ? { ...h, currentPrice: newPrice } : h
-      ),
-    }))
-  }, [updateActivePortfolio])
+  const addTransaction = useCallback(async (transaction: Omit<Transaction, 'id'>) => {
+    if (!user || !activePortfolioId) return
+    const { data, error } = await supabase.from('transactions').insert({
+      portfolio_id: activePortfolioId, user_id: user.id,
+      date: transaction.date, type: transaction.type,
+      asset_name: transaction.assetName, symbol: transaction.symbol.toUpperCase(),
+      shares: transaction.shares, price_per_share: transaction.pricePerShare,
+      total: transaction.total, notes: transaction.notes,
+    }).select().single()
+    if (!error && data) setTransactions(prev => [{
+      id: data.id, date: data.date, type: data.type as Transaction['type'],
+      assetName: data.asset_name, symbol: data.symbol,
+      shares: Number(data.shares), pricePerShare: Number(data.price_per_share),
+      total: Number(data.total), notes: data.notes,
+    }, ...prev])
+  }, [user, activePortfolioId])
 
-  // Delete a holding
-  const deleteHolding = useCallback((id: string) => {
-    updateActivePortfolio(p => ({
-      ...p,
-      holdings: p.holdings.filter(h => h.id !== id),
-    }))
-  }, [updateActivePortfolio])
+  const deleteTransaction = useCallback(async (id: string) => {
+    if (!user) return
+    await supabase.from('transactions').delete().eq('id', id).eq('user_id', user.id)
+    setTransactions(prev => prev.filter(t => t.id !== id))
+  }, [user])
 
-  // Add a new transaction
-  const addTransaction = useCallback((transaction: Omit<Transaction, 'id'>) => {
-    updateActivePortfolio(p => {
-      const newTransaction: Transaction = {
-        ...transaction,
-        id: generateId(),
-      }
-
-      let updatedHoldings = [...p.holdings]
-
-      // If it's a BUY, update or create holding
-      if (transaction.type === 'COMPRA') {
-        const existingIndex = updatedHoldings.findIndex(
-          h => h.symbol === transaction.symbol
-        )
-        if (existingIndex >= 0) {
-          const existing = updatedHoldings[existingIndex]
-          const totalShares = existing.quantity + transaction.shares
-          const totalCost = existing.avgCost * existing.quantity + transaction.total
-          updatedHoldings[existingIndex] = {
-            ...existing,
-            quantity: totalShares,
-            avgCost: totalCost / totalShares,
-          }
-        } else {
-          // Create new holding
-          updatedHoldings.push({
-            id: generateId(),
-            name: transaction.assetName,
-            symbol: transaction.symbol,
-            sector: 'Otros',
-            sectorColor: SECTOR_COLORS['Otros'],
-            quantity: transaction.shares,
-            avgCost: transaction.pricePerShare,
-            currentPrice: transaction.pricePerShare,
-            entryDate: transaction.date,
-          })
-        }
-      }
-
-      // If it's a SELL, reduce holding quantity
-      if (transaction.type === 'VENTA') {
-        const existingIndex = updatedHoldings.findIndex(
-          h => h.symbol === transaction.symbol
-        )
-        if (existingIndex >= 0) {
-          const existing = updatedHoldings[existingIndex]
-          const newQuantity = existing.quantity - transaction.shares
-          if (newQuantity <= 0) {
-            updatedHoldings = updatedHoldings.filter((_, i) => i !== existingIndex)
-          } else {
-            updatedHoldings[existingIndex] = {
-              ...existing,
-              quantity: newQuantity,
-            }
-          }
-        }
-      }
-
-      // Update snapshots
-      const newSnapshots = [...p.snapshots]
-      const totalValue = updatedHoldings.reduce((sum, h) => sum + h.currentPrice * h.quantity, 0)
-      const totalInvested = updatedHoldings.reduce((sum, h) => sum + h.avgCost * h.quantity, 0)
-      const today = new Date().toISOString().split('T')[0]
-      
-      const existingSnapshotIndex = newSnapshots.findIndex(s => s.date === today)
-      if (existingSnapshotIndex >= 0) {
-        newSnapshots[existingSnapshotIndex] = { date: today, value: totalValue, invested: totalInvested }
-      } else {
-        newSnapshots.push({ date: today, value: totalValue, invested: totalInvested })
-      }
-
-      return {
-        ...p,
-        holdings: updatedHoldings,
-        transactions: [newTransaction, ...p.transactions].sort(
-          (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-        ),
-        snapshots: newSnapshots.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
-      }
-    })
-  }, [updateActivePortfolio])
-
-  // Update an existing transaction
-  const updateTransaction = useCallback((id: string, updates: Partial<Omit<Transaction, 'id'>>) => {
-    updateActivePortfolio(p => ({
-      ...p,
-      transactions: p.transactions.map(t => 
-        t.id === id ? { ...t, ...updates } : t
-      ),
-    }))
-  }, [updateActivePortfolio])
-
-  // Delete a transaction
-  const deleteTransaction = useCallback((id: string) => {
-    updateActivePortfolio(p => ({
-      ...p,
-      transactions: p.transactions.filter(t => t.id !== id),
-    }))
-  }, [updateActivePortfolio])
-
-  // Update profile
-  const updateProfile = useCallback((updates: Partial<UserProfile>) => {
-    updateActivePortfolio(p => ({
-      ...p,
-      profile: { ...p.profile, ...updates },
-    }))
-  }, [updateActivePortfolio])
-
-  // Export data to CSV
-  const exportToCSV = useCallback(() => {
-    if (!activePortfolio) return ''
-    
-    const headers = ['Fecha', 'Tipo', 'Activo', 'Símbolo', 'Acciones', 'Precio', 'Total', 'Notas']
-    const rows = activePortfolio.transactions.map(t => [
-      t.date,
-      t.type,
-      t.assetName,
-      t.symbol,
-      t.shares.toString(),
-      t.pricePerShare.toString(),
-      t.total.toString(),
-      t.notes || '',
-    ])
-    
-    const csvContent = [headers, ...rows].map(row => row.join(',')).join('\n')
-    return csvContent
-  }, [activePortfolio])
-
-  // Import data from CSV
-  const importFromCSV = useCallback((csvContent: string) => {
-    const lines = csvContent.split('\n').filter(line => line.trim())
-    if (lines.length < 2) return
-    
-    const transactions: Transaction[] = []
-    for (let i = 1; i < lines.length; i++) {
-      const cols = lines[i].split(',')
-      if (cols.length >= 7) {
-        transactions.push({
-          id: generateId(),
-          date: cols[0],
-          type: cols[1] as Transaction['type'],
-          assetName: cols[2],
-          symbol: cols[3],
-          shares: parseFloat(cols[4]) || 0,
-          pricePerShare: parseFloat(cols[5]) || 0,
-          total: parseFloat(cols[6]) || 0,
-          notes: cols[7] || '',
-        })
-      }
+  const saveWeeklySnapshot = useCallback(async () => {
+    if (!user || !activePortfolioId || holdings.length === 0) return false
+    const totalValue = holdings.reduce((sum, h) => sum + h.currentPrice * h.quantity, 0)
+    const totalInvested = holdings.reduce((sum, h) => sum + h.avgCost * h.quantity, 0)
+    const today = new Date().toISOString().split('T')[0]
+    const { data, error } = await supabase.from('snapshots').upsert({
+      portfolio_id: activePortfolioId, user_id: user.id,
+      date: today, value: totalValue, invested: totalInvested,
+    }, { onConflict: 'portfolio_id,date' }).select().single()
+    if (!error && data) {
+      setSnapshots(prev => {
+        const filtered = prev.filter(s => s.date !== today)
+        return [...filtered, { date: data.date, value: Number(data.value), invested: Number(data.invested) }]
+          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      })
     }
-    
-    updateActivePortfolio(p => ({
-      ...p,
-      transactions: [...transactions, ...p.transactions].sort(
-        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-      ),
-    }))
-  }, [updateActivePortfolio])
+    return !error
+  }, [user, activePortfolioId, holdings])
 
-  // Save a weekly snapshot of the current portfolio state
-  const saveWeeklySnapshot = useCallback(() => {
-    let savedDate = ''
-    updateActivePortfolio(p => {
-      if (p.holdings.length === 0) return p
-      
-      const totalValue = p.holdings.reduce((sum, h) => sum + h.currentPrice * h.quantity, 0)
-      const totalInvested = p.holdings.reduce((sum, h) => sum + h.avgCost * h.quantity, 0)
-      const today = new Date().toISOString().split('T')[0]
-      
-      savedDate = new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })
-      
-      const newSnapshot: PortfolioSnapshot = {
-        date: today,
-        value: totalValue,
-        invested: totalInvested,
-      }
-      
-      const existingIndex = p.snapshots.findIndex(s => s.date === today)
-      let newSnapshots: PortfolioSnapshot[]
-      
-      if (existingIndex >= 0) {
-        newSnapshots = [...p.snapshots]
-        newSnapshots[existingIndex] = newSnapshot
-      } else {
-        newSnapshots = [...p.snapshots, newSnapshot]
-      }
-      
-      newSnapshots = newSnapshots
-        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-        .slice(-52)
-      
-      return {
-        ...p,
-        snapshots: newSnapshots,
-      }
-    })
-    
-    return savedDate || new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })
-  }, [updateActivePortfolio])
-
-  // Reset all data for current portfolio
-  const resetData = useCallback(() => {
-    updateActivePortfolio(p => ({
-      ...p,
-      holdings: [],
-      transactions: [],
-      snapshots: [],
-      profile: { ...DEFAULT_PROFILE },
-    }))
-  }, [updateActivePortfolio])
+  const exportToCSV = useCallback(() => {
+    const headers = ['Fecha', 'Tipo', 'Activo', 'Símbolo', 'Acciones', 'Precio', 'Total', 'Notas']
+    const rows = transactions.map(t => [t.date, t.type, t.assetName, t.symbol, t.shares, t.pricePerShare, t.total, t.notes || ''])
+    return [headers, ...rows].map(row => row.join(',')).join('\n')
+  }, [transactions])
 
   return {
-    // Storage state
-    portfolios: storage?.portfolios || [],
-    activePortfolioId: storage?.activePortfolioId || null,
-    activePortfolio,
-    hasActivePortfolio: !!activePortfolio,
-    
-    // Data from active portfolio
-    holdings: activePortfolio?.holdings || [],
-    holdingsWithMetrics,
-    transactions: activePortfolio?.transactions || [],
-    profile: activePortfolio?.profile || DEFAULT_PROFILE,
-    snapshots: activePortfolio?.snapshots || [],
-    metrics,
-    isLoaded,
-    
-    // Portfolio management actions
-    createPortfolio,
-    selectPortfolio,
-    exitPortfolio,
-    deletePortfolio,
-    updatePortfolioMeta,
-    
-    // Portfolio data actions
-    addHolding,
-    updateHolding,
-    updateHoldingPrice,
-    deleteHolding,
-    addTransaction,
-    updateTransaction,
-    deleteTransaction,
-    updateProfile,
-    exportToCSV,
-    importFromCSV,
-    resetData,
-    saveWeeklySnapshot,
+    user, portfolios, activePortfolio, activePortfolioId,
+    createPortfolio, selectPortfolio, renamePortfolio, deletePortfolio, exitPortfolio,
+    holdings, holdingsWithMetrics, transactions, snapshots, metrics, isLoaded,
+    addHolding, updateHolding, deleteHolding, updateHoldingPrice,
+    addTransaction, deleteTransaction, saveWeeklySnapshot, exportToCSV, SECTOR_COLORS,
   }
 }
