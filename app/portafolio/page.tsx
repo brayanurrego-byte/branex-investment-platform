@@ -102,7 +102,7 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
 
 export default function PortafolioPage() {
   const router = useRouter()
-  const { holdingsWithMetrics, addHolding, updateHolding, updateHoldingPrice, deleteHolding, metrics, isLoaded, saveWeeklySnapshot, hasActivePortfolio } = useBranex()
+  const { holdingsWithMetrics, addHolding, updateHolding, updateHoldingPrice, deleteHolding, metrics, isLoaded, saveWeeklySnapshot, activePortfolioId } = useBranex()
   const [searchTerm, setSearchTerm] = useState('')
   const [showAddModal, setShowAddModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -112,7 +112,7 @@ export default function PortafolioPage() {
 
   // Protect route
   useEffect(() => {
-    if (isLoaded && !hasActivePortfolio) {
+    if (isLoaded && !activePortfolioId) {
       router.replace('/')
     }
   }, [isLoaded, hasActivePortfolio, router])
@@ -197,7 +197,7 @@ export default function PortafolioPage() {
     )
   }
 
-  if (!hasActivePortfolio) {
+  if (!activePortfolioId) {
     return (
       <div className="min-h-screen bg-[#050510] flex items-center justify-center">
         <div className="text-white">Redirigiendo...</div>
