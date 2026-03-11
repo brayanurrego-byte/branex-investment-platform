@@ -38,10 +38,12 @@ export function useBranexData() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [snapshots, setSnapshots] = useState<PortfolioSnapshot[]>([])
   const [isLoaded, setIsLoaded] = useState(false)
+  const [profile, setProfile] = useState({ name: '', company: '', currency: 'USD', portfolioStartDate: '', initialCapital: 0, benchmark: 'SP500' })
 
   useEffect(() => {
     if (!user) { setPortfolios([]); setIsLoaded(true); return }
     loadPortfolios()
+    loadProfile()
   }, [user])
 
   useEffect(() => {
@@ -55,6 +57,12 @@ export function useBranexData() {
     const saved = localStorage.getItem('branex_active_portfolio')
     if (saved) setActivePortfolioId(saved)
   }, [user])
+
+  const loadProfile = async () => {
+    if (!user) return
+    const { data } = await supabase.from('user_profiles').select('*').eq('id', user.id).single()
+    if (data) setProfile(prev => ({ ...prev, name: data.name || '', company: data.company || '' }))
+  }
 
   const loadPortfolios = async () => {
     if (!user) return
@@ -250,6 +258,21 @@ export function useBranexData() {
     return !error
   }, [user, activePortfolioId, holdings])
 
+  const updateProfile = useCallback(async (updates: Partial<typeof profile>) => {
+    if (!user) return
+    setProfile(prev => ({ ...prev, ...updates }))
+    const { name, company } = { ...profile, ...updates }
+    await supabase.from('user_profiles').upsert({ id: user.id, name, company })
+  }, [user, profile])
+
+  const updatePortfolioMeta = useCallback(async (updates: { name?: string }) => {
+    if (!user || !activePortfolioId) return
+    if (updates.name) {
+      await supabase.from('portfolios').update({ name: updates.name }).eq('id', activePortfolioId).eq('user_id', user.id)
+      setPortfolios(prev => prev.map(p => p.id === activePortfolioId ? { ...p, name: updates.name! } : p))
+    }
+  }, [user, activePortfolioId])
+
   const exportToCSV = useCallback(() => {
     const headers = ['Fecha', 'Tipo', 'Activo', 'Símbolo', 'Acciones', 'Precio', 'Total', 'Notas']
     const rows = transactions.map(t => [t.date, t.type, t.assetName, t.symbol, t.shares, t.pricePerShare, t.total, t.notes || ''])
@@ -257,9 +280,10 @@ export function useBranexData() {
   }, [transactions])
 
   return {
-    user, portfolios, activePortfolio, activePortfolioId,
+    user, profile, portfolios, activePortfolio, activePortfolioId,
     createPortfolio, selectPortfolio, renamePortfolio, deletePortfolio, exitPortfolio,
     holdings, holdingsWithMetrics, transactions, snapshots, metrics, isLoaded,
+    updateProfile, updatePortfolioMeta,
     addHolding, updateHolding, deleteHolding, updateHoldingPrice,
     addTransaction, deleteTransaction, saveWeeklySnapshot, exportToCSV, SECTOR_COLORS,
   }
